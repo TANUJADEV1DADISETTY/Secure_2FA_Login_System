@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Secure 2FA Authentication Portal (TOTP + AES-256-GCM)</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+  <div class="app-container">
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-badge">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            <path d="M12 8v4M12 16h.01"/>
+          </svg>
+        </div>
+        <div>
+          <h1>Secure 2FA Authentication System</h1>
+          <p class="subtitle">RFC 6238 TOTP Engine &bull; AES-256-GCM at Rest &bull; Replay Defense</p>
+        </div>
+      </div>
+      <div class="header-status">
+        <span class="status-indicator online"></span>
+        <span id="system-health">API Online</span>
+      </div>
+    </header>
+
+    <div class="banner-test-user">
+      <div class="banner-content">
+        <span class="pill">Pre-seeded Test User (submission.json)</span>
+        <code>test_2fa@example.com</code> / <code>securePassword123</code>
+        <span class="pill-secret">Secret: <code>JBSWY3DPEHPK3PXP</code></span>
+      </div>
+      <button id="btn-autofill-testuser" class="btn btn-secondary btn-sm">Load Test User</button>
+    </div>
+
+    <main class="grid-layout">
+      <!-- Section 1: Authentication Flows -->
+      <section class="card auth-card">
+        <div class="card-header">
+          <div class="tab-nav">
+            <button class="tab-btn active" data-tab="login-tab">1. Login Flow</button>
+            <button class="tab-btn" data-tab="register-tab">Register User</button>
+            <button class="tab-btn" data-tab="setup-tab">Provision 2FA (Setup)</button>
+          </div>
+        </div>
+
+        <!-- Login Tab -->
+        <div id="login-tab" class="tab-content active">
+          <h3>Step 1: Password Authentication</h3>
+          <p class="section-desc">Tests <code>POST /api/auth/login</code>. Accounts with 2FA enabled return a restricted challenge token, not a full session token.</p>
+          
+          <form id="form-login">
+            <div class="input-group">
+              <label for="login-email">Email Address</label>
+              <input type="email" id="login-email" required placeholder="user@example.com">
+            </div>
+            <div class="input-group">
+              <label for="login-password">Password</label>
+              <input type="password" id="login-password" required placeholder="Min 8 characters">
+            </div>
+            <button type="submit" class="btn btn-primary" id="btn-login">Submit Password</button>
+          </form>
+
+          <!-- 2FA Challenge Box (revealed on requires_2fa: true) -->
+          <div id="challenge-box" class="challenge-box hidden">
+            <div class="challenge-header">
+              <span class="badge badge-warning">2FA Challenge Triggered</span>
+              <span class="badge-timer" id="totp-timer">Step window: --s</span>
+            </div>
+            <p>A restricted <code>challenge_token</code> was issued. Enter the 6-digit TOTP code to complete login.</p>
+            
+            <div class="live-generator">
+              <div class="generator-info">
+                <span>Calculated TOTP for seeded secret:</span>
+                <span class="live-code" id="live-code-display">------</span>
+              </div>
+              <button type="button" class="btn btn-ghost btn-xs" id="btn-use-live-code">Use Current Code</button>
+            </div>
+
+            <form id="form-challenge">
+              <div class="input-group">
+                <label for="challenge-code">6-Digit TOTP Code</label>
+                <input type="text" id="challenge-code" maxlength="6" pattern="[0-9]{6}" required placeholder="e.g. 123456" class="code-input">
+              </div>
+              <div class="button-row">
+                <button type="submit" class="btn btn-success" id="btn-verify-totp">Verify & Complete Login</button>
+                <button type="button" class="btn btn-danger" id="btn-test-replay">Simulate Replay Attack</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <!-- Register Tab -->
+        <div id="register-tab" class="tab-content">
+          <h3>Register New Account</h3>
+          <p class="section-desc">Tests <code>POST /api/auth/register</code>. Passwords hashed with bcrypt before PostgreSQL storage.</p>
+          <form id="form-register">
+            <div class="input-group">
+              <label for="reg-email">Email Address</label>
+              <input type="email" id="reg-email" required placeholder="newuser@example.com">
+            </div>
+            <div class="input-group">
+              <label for="reg-password">Password (min 8 chars)</label>
+              <input type="password" id="reg-password" minlength="8" required placeholder="Minimum 8 characters">
+            </div>
+            <button type="submit" class="btn btn-primary">Create Account</button>
+          </form>
+        </div>
+
+        <!-- Setup 2FA Tab -->
+        <div id="setup-tab" class="tab-content">
+          <h3>Provision Two-Factor Authentication</h3>
+          <p class="section-desc">Tests <code>POST /api/auth/2fa/setup</code> & <code>POST /api/auth/2fa/verify</code>. Requires a Full Access Token.</p>
+          
+          <div id="setup-logged-in-state">
+            <button type="button" class="btn btn-primary" id="btn-start-setup">Generate 2FA Secret & QR Code</button>
+            
+            <div id="setup-details" class="setup-details hidden">
+              <div class="qr-container">
+                <div id="qrcode"></div>
+                <div class="setup-secret-box">
+                  <label>Base32 Secret:</label>
+                  <code id="setup-secret-text">------</code>
+                  <label>OTPAuth URI:</label>
+                  <pre id="setup-uri-text" class="uri-box"></pre>
+                </div>
+              </div>
+
+              <div class="setup-verify-box">
+                <h4>Confirm Enrollment with First Code</h4>
+                <div class="input-group">
+                  <input type="text" id="setup-verify-code" maxlength="6" placeholder="Enter 6-digit code">
+                </div>
+                <button type="button" class="btn btn-success" id="btn-confirm-setup">Verify & Enable 2FA</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 2: Real-time Inspection & Security Verification -->
+      <section class="card inspect-card">
+        <div class="card-header">
+          <h3>Live Session & Security Inspector</h3>
+          <button class="btn btn-ghost btn-xs" id="btn-clear-logs">Clear Logs</button>
+        </div>
+
+        <div class="session-state">
+          <div class="token-display">
+            <div class="token-title">Current Challenge Token:</div>
+            <code id="display-challenge-token" class="token-value">None</code>
+          </div>
+          <div class="token-display">
+            <div class="token-title">Current Full Access Token:</div>
+            <code id="display-access-token" class="token-value">None</code>
+          </div>
+        </div>
+
+        <div class="action-bar">
+          <button class="btn btn-secondary btn-sm" id="btn-test-protected-token">Test Protected Route (With Access Token)</button>
+          <button class="btn btn-outline btn-sm" id="btn-test-challenge-bypass">Test 2FA Bypass Attempt (With Challenge Token)</button>
+        </div>
+
+        <div class="card-header logs-header">
+          <h4>API Response & Audit Log</h4>
+        </div>
+        <div class="log-console" id="log-console">
+          <div class="log-entry log-info">[System] Ready. Enter credentials or click "Load Test User" above.</div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="app-footer">
+      <div class="spec-tags">
+        <span class="tag">RFC 6238 TOTP</span>
+        <span class="tag">AES-256-GCM AEAD</span>
+        <span class="tag">PostgreSQL Relational Storage</span>
+        <span class="tag">Constant-Time TimingSafeEqual</span>
+        <span class="tag">Replay Window Tracking</span>
+      </div>
+      <p>Secure 2FA Login System &copy; 2026</p>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
